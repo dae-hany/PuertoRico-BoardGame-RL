@@ -53,32 +53,32 @@ QUARRY_COUNT = 5 # Separate stack
 
 # Buildings
 # ID: (Name, Cost, VP, MaxWorkers, QuarryLimit)
-BUILDING_SMALL_FRUIT = 0
-BUILDING_SMALL_SUGAR = 1
-BUILDING_LARGE_FRUIT = 2
-BUILDING_LARGE_SUGAR = 3
-BUILDING_TOBACCO = 4
-BUILDING_COFFEE = 5
+BUILDING_SMALL_FRUIT = 0            # 소형 과일 공장
+BUILDING_SMALL_SUGAR = 1            # 소형 설탕 공장 
+BUILDING_LARGE_FRUIT = 2            # 대형 과일 공장
+BUILDING_LARGE_SUGAR = 3            # 대형 설탕 공장
+BUILDING_TOBACCO = 4                # 담배 공장
+BUILDING_COFFEE = 5                 # 커피 공장
 
-BUILDING_SMALL_MARKET = 6
-BUILDING_HACIENDA = 7
-BUILDING_CONSTRUCTION_HUT = 8
-BUILDING_SMALL_WAREHOUSE = 9
-BUILDING_HOSPICE = 10
-BUILDING_OFFICE = 11
-BUILDING_LARGE_MARKET = 12
-BUILDING_LARGE_WAREHOUSE = 13
-BUILDING_FACTORY = 14
-BUILDING_UNIVERSITY = 15
-BUILDING_HARBOR = 16
-BUILDING_WHARF = 17
+BUILDING_SMALL_MARKET = 6           # 소형 상가
+BUILDING_HACIENDA = 7               # 농장
+BUILDING_CONSTRUCTION_HUT = 8       # 건설막
+BUILDING_SMALL_WAREHOUSE = 9        # 소형 창고
+BUILDING_HOSPICE = 10               # 병원
+BUILDING_OFFICE = 11                # 영업소
+BUILDING_LARGE_MARKET = 12          # 대형 상가
+BUILDING_LARGE_WAREHOUSE = 13       # 대형 창고
+BUILDING_FACTORY = 14               # 공업소
+BUILDING_UNIVERSITY = 15            # 학교
+BUILDING_HARBOR = 16                # 항구
+BUILDING_WHARF = 17                 # 조선소
 
 # Large Buildings
-BUILDING_GUILD_HALL = 18    # 소방서
-BUILDING_RESIDENCE = 19     # 주거지
-BUILDING_FORTRESS = 20      # 요새
-BUILDING_CUSTOMS_HOUSE = 21 # 세관
-BUILDING_CITY_HALL = 22     # 시청
+BUILDING_GUILD_HALL = 18            # 소방서
+BUILDING_RESIDENCE = 19             # 주거지
+BUILDING_FORTRESS = 20              # 요새
+BUILDING_CUSTOMS_HOUSE = 21         # 세관
+BUILDING_CITY_HALL = 22             # 시청
 
 NUM_BUILDINGS = 23
 
@@ -92,31 +92,30 @@ BUILDING_INFO = {
     BUILDING_TOBACCO:          (5, 3, 3, 3),
     BUILDING_COFFEE:           (6, 3, 2, 3),
     
-    BUILDING_SMALL_MARKET:     (1, 1, 1, 1), # 소형 상가
-    BUILDING_HACIENDA:         (2, 1, 1, 1), # 대규모 농장
-    BUILDING_CONSTRUCTION_HUT: (2, 1, 1, 1), # 건설막
-    BUILDING_SMALL_WAREHOUSE:  (3, 1, 1, 1), # 소형 창고
-    BUILDING_HOSPICE:          (4, 2, 1, 2), # 병원
-    BUILDING_OFFICE:           (5, 2, 1, 2), # 영업소
-    BUILDING_LARGE_MARKET:     (5, 2, 1, 2), # 대형 상가
-    BUILDING_LARGE_WAREHOUSE:  (6, 2, 1, 2), # 대형 창고
-    BUILDING_FACTORY:          (7, 3, 1, 3), # 공업소
-    BUILDING_UNIVERSITY:       (8, 3, 1, 3), # 학교
-    BUILDING_HARBOR:           (8, 3, 1, 3), # 항구
-    BUILDING_WHARF:            (9, 3, 1, 3), # 조선소
+    BUILDING_SMALL_MARKET:     (1, 1, 1, 1), 
+    BUILDING_HACIENDA:         (2, 1, 1, 1), 
+    BUILDING_CONSTRUCTION_HUT: (2, 1, 1, 1), 
+    BUILDING_SMALL_WAREHOUSE:  (3, 1, 1, 1), 
+    BUILDING_HOSPICE:          (4, 2, 1, 2), 
+    BUILDING_OFFICE:           (5, 2, 1, 2), 
+    BUILDING_LARGE_MARKET:     (5, 2, 1, 2), 
+    BUILDING_LARGE_WAREHOUSE:  (6, 2, 1, 2),
+    BUILDING_FACTORY:          (7, 3, 1, 3), 
+    BUILDING_UNIVERSITY:       (8, 3, 1, 3), 
+    BUILDING_HARBOR:           (8, 3, 1, 3), 
+    BUILDING_WHARF:            (9, 3, 1, 3), 
     
-    BUILDING_GUILD_HALL:       (10, 4, 1, 4), # 소방서
-    BUILDING_RESIDENCE:        (10, 4, 1, 4), # 주거지
-    BUILDING_FORTRESS:         (10, 4, 1, 4), # 요새
-    BUILDING_CUSTOMS_HOUSE:    (10, 4, 1, 4), # 세관
-    BUILDING_CITY_HALL:        (10, 4, 1, 4), # 시청
+    BUILDING_GUILD_HALL:       (10, 4, 1, 4), 
+    BUILDING_RESIDENCE:        (10, 4, 1, 4), 
+    BUILDING_FORTRESS:         (10, 4, 1, 4), 
+    BUILDING_CUSTOMS_HOUSE:    (10, 4, 1, 4), 
+    BUILDING_CITY_HALL:        (10, 4, 1, 4), 
 }
 
-# Building Counts for 2 Players
-# 2 of each production, 1 of each commercial/large
-BUILDING_COUNTS = {i: 2 for i in range(6)}
+# Building Counts for 2 Players(생산 건물은 2개씩, 상업 건물과 고급 건물은 1개씩)
+BUILDING_COUNTS = {i: 2 for i in range(6)} 
 for i in range(6, NUM_BUILDINGS):
-    BUILDING_COUNTS[i] = 1
+    BUILDING_COUNTS[i] = 1 
 
 # Ships
 SHIP_CAPACITIES = [4, 6]
@@ -142,7 +141,7 @@ ACTION_SETTLER_TAKE_QUARRY = 10
 
 ACTION_BUILD_START = 11
 # Mapping: Action = ACTION_BUILD_START + BuildingID (0-22) -> 11-33
-
+"""여기까지 읽었음"""
 ACTION_SELL_CORN = 34
 ACTION_SELL_FRUIT = 35
 ACTION_SELL_SUGAR = 36
