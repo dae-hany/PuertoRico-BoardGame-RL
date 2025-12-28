@@ -49,6 +49,12 @@ class GameState:
         # In action phase: the player defined by the queue.
         self.action_queue = [] # List of player indices
         self.captain_consecutive_passes = 0 # Track passes in Captain Phase
+        
+        # New State Variables for Refactoring
+        self.hacienda_used = False # Has current player used Hacienda this turn?
+        self.rotting_queue = [] # Players who need to discard
+        self.rotting_protected_types = [] # List of good types protected so far for current rotting player
+        self.rotting_step = 0 # 0: Small WH, 1: Large WH, 2: Windrose
 
 
 class PlayerState:
@@ -121,9 +127,6 @@ class PuertoRicoEnv2P(gym.Env):
             return mask
             
         # If queue is active, current player is determined by queue
-        # But wait, self.game_state.current_player_idx needs to be kept in sync?
-        # Yes, I should update current_player_idx at start of step if queue changes.
-        
         current_p_idx = gs.current_player_idx
         current_p = gs.players[current_p_idx]
         
@@ -134,6 +137,17 @@ class PuertoRicoEnv2P(gym.Env):
                     mask[c.ACTION_CHOOSE_ROLE_SETTLER + r_id] = 1
         
         elif gs.phase == c.PHASE_SETTLER:
+            # Hacienda Check
+            has_hacienda = False
+            for slot in current_p.city:
+                if slot['building'] == c.BUILDING_HACIENDA and slot['workers'] > 0:
+                    has_hacienda = True
+                    break
+            
+            # If has Hacienda and NOT used yet, allow USE
+            if has_hacienda and not gs.hacienda_used:
+                mask[c.ACTION_USE_HACIENDA] = 1
+            
             # Market plantations (Indexes 0, 1, 2)
             for i in range(len(gs.market_plantations)):
                 mask[c.ACTION_SETTLER_TAKE_PLANTATION_0 + i] = 1
@@ -149,13 +163,7 @@ class PuertoRicoEnv2P(gym.Env):
             if (gs.current_role_privilege or has_hut) and gs.supply_quarries > 0:
                 mask[c.ACTION_SETTLER_TAKE_QUARRY] = 1
             
-            # Pass (Optional? Line 62: "Player can choose not to take")
-            # Usually players must take if they can? 
-            # Rulebook Line 62: "cf. Playuer is not required to take a plantation tile if they don't want to."
-            # So always allow PASS or treat "Take Nothing" as action?
-            # I'll enable PASS for Settler.
-            pass_action = c.ACTION_PASS # Define this in constants? It is 73.
-            mask[pass_action] = 1
+            mask[c.ACTION_PASS] = 1
                 
         # Custom Logic for Mayor Placement Masking
         elif gs.phase == c.PHASE_MAYOR:
@@ -179,10 +187,6 @@ class PuertoRicoEnv2P(gym.Env):
                              can_place = True
                              
             # 3. Pass Logic
-            # "Player cannot voluntarily store colonists... must place... if there is empty slot."
-            # So Pass is allowed ONLY if you CANNOT place.
-            # OR if san_juan_workers == 0 (You are done).
-            
             if not can_place:
                 mask[c.ACTION_PASS] = 1
             else:
@@ -241,28 +245,25 @@ class PuertoRicoEnv2P(gym.Env):
                     valid_ship = False
                     # Check Normal Ships
                     for s_idx, ship in enumerate(gs.ships):
-                        if ship['good'] == g_id and ship['count'] < ship['capacity']:
-                            valid_ship = True
-                            break
-                        elif ship['good'] == -1:
-                             # Check other ships for this good
+                        if ship['count'] == 0:
+                             # Check if other ships have this good
                              other_has = False
                              for other_s in gs.ships:
-                                 if other_s['good'] == g_id:
+                                 if other_s['good'] == g_id and other_s['count'] > 0:
                                      other_has = True
                                      break
                              if not other_has:
                                  valid_ship = True
-                                 break
+                        elif ship['good'] == g_id and ship['count'] < ship['capacity']:
+                            valid_ship = True
                     
-                    if not valid_ship and has_wharf:
-                        valid_ship = True # Can use Wharf
-                        
                     if valid_ship:
                              mask[c.ACTION_SHIP_CORN + g_id] = 1
                              can_ship = True
-                             # Found valid ship for this good
-                             # break # Can't break, need to check other goods
+                    
+                    if has_wharf:
+                        mask[c.ACTION_SHIP_TO_WHARF_CORN + g_id] = 1
+                        can_ship = True
             
             if not can_ship:
                 mask[c.ACTION_PASS] = 1
@@ -297,9 +298,6 @@ class PuertoRicoEnv2P(gym.Env):
                     # Check 3: Affordability
                     cost = c.BUILDING_INFO[b_id][0]
                     # Calc Discount
-                    # Helper func? Inline for now
-                    is_selector = (gs.current_role_privilege and gs.current_player_idx == gs.action_queue[0])
-                    # Actually gs.current_role_privilege IS identifying the selector current turn.
                     if gs.current_role_privilege:
                          cost -= 1
                          
@@ -326,8 +324,14 @@ class PuertoRicoEnv2P(gym.Env):
                      elif g_id == c.SUGAR: mask[c.ACTION_CRAFTSMAN_BONUS_SUGAR] = 1
                      elif g_id == c.TOBACCO: mask[c.ACTION_CRAFTSMAN_BONUS_TOBACCO] = 1
                      elif g_id == c.COFFEE: mask[c.ACTION_CRAFTSMAN_BONUS_COFFEE] = 1
+        
+        elif gs.phase == c.PHASE_ROTTING:
+            # Allow keeping goods
+            for g_id in range(c.NUM_GOODS):
+                if current_p.goods[g_id] > 0:
+                    mask[c.ACTION_KEEP_CORN + g_id] = 1
                      
-        # Placeholder for other phases - allow PASS to prevent deadlock in tests
+        # Placeholder for other phases
         elif gs.phase in [c.PHASE_TRADER, c.PHASE_CAPTAIN, c.PHASE_PROSPECTOR]:
              mask[c.ACTION_PASS] = 1
              
@@ -370,6 +374,8 @@ class PuertoRicoEnv2P(gym.Env):
         # Default placeholder logic
         elif gs.phase == c.PHASE_GAME_END:
             terminated = True
+        elif gs.phase == c.PHASE_ROTTING:
+            self._step_rotting(action)
         else:
             self._advance_queue()
             
@@ -581,6 +587,51 @@ class PuertoRicoEnv2P(gym.Env):
         gs = self.game_state
         current_p = gs.players[gs.current_player_idx]
         
+        # 1. Handle Hacienda Action
+        if action == c.ACTION_USE_HACIENDA:
+            # Draw random tile from deck
+            extra_tile = -1
+            if gs.plantation_deck:
+                extra_tile = gs.plantation_deck.pop(0)
+            elif gs.discarded_plantations:
+                 random.shuffle(gs.discarded_plantations)
+                 gs.plantation_deck.extend(gs.discarded_plantations)
+                 gs.discarded_plantations = []
+                 if gs.plantation_deck:
+                     extra_tile = gs.plantation_deck.pop(0)
+            
+            if extra_tile != -1:
+                # Place on island
+                placed = False
+                for i, slot in enumerate(current_p.island):
+                    if slot['tile'] == -1:
+                        slot['tile'] = extra_tile
+                        placed = True
+                        
+                        # Hospice Check for Hacienda Tile
+                        has_hospice = False
+                        for s in current_p.city:
+                            if s['building'] == c.BUILDING_HOSPICE and s['workers'] > 0:
+                                has_hospice = True
+                                break
+                        
+                        if has_hospice:
+                             if gs.supply_colonists > 0:
+                                slot['workers'] = 1
+                                gs.supply_colonists -= 1
+                             elif gs.colonist_ship > 0:
+                                slot['workers'] = 1
+                                gs.colonist_ship -= 1
+                        break
+                
+                if not placed:
+                    gs.discarded_plantations.append(extra_tile)
+            
+            gs.hacienda_used = True
+            # Do NOT advance queue. Player must still take market action.
+            return
+
+        # 2. Handle Market/Quarry/Pass Actions
         tile_to_take = -1
         is_quarry = False
         
@@ -622,6 +673,9 @@ class PuertoRicoEnv2P(gym.Env):
                     elif gs.colonist_ship > 0:
                         current_p.island[target_slot]['workers'] = 1
                         gs.colonist_ship -= 1
+            else:
+                # Return quarry if no space
+                gs.supply_quarries += 1
 
         elif tile_to_take != -1:
              target_slot = -1
@@ -646,49 +700,9 @@ class PuertoRicoEnv2P(gym.Env):
                     elif gs.colonist_ship > 0:
                         current_p.island[target_slot]['workers'] = 1
                         gs.colonist_ship -= 1
-        
-        # Hacienda Ability: If occupied, draw 1 extra random tile from deck
-        has_hacienda = False
-        for slot in current_p.city:
-            if slot['building'] == c.BUILDING_HACIENDA and slot['workers'] > 0:
-                has_hacienda = True
-                break
-        
-        if has_hacienda:
-            # Draw from deck
-            has_hospice = False 
-            for slot in current_p.city:
-                if slot['building'] == c.BUILDING_HOSPICE and slot['workers'] > 0:
-                    has_hospice = True
-                    break
-
-            extra_tile = -1
-            if gs.plantation_deck:
-                extra_tile = gs.plantation_deck.pop()
-            elif gs.discarded_plantations:
-                 random.shuffle(gs.discarded_plantations)
-                 gs.plantation_deck.extend(gs.discarded_plantations)
-                 gs.discarded_plantations = []
-                 if gs.plantation_deck:
-                     extra_tile = gs.plantation_deck.pop()
-            
-            if extra_tile != -1:
-                # Place on island
-                for i, slot in enumerate(current_p.island):
-                    if slot['tile'] == -1:
-                        slot['tile'] = extra_tile
-                        if has_hospice:
-                             if gs.supply_colonists > 0:
-                                slot['workers'] = 1
-                                gs.supply_colonists -= 1
-                             elif gs.colonist_ship > 0:
-                                slot['workers'] = 1
-                                gs.colonist_ship -= 1
-                        break
-                    
-        self._advance_queue()
-
-    def _step_mayor(self, action):
+             else:
+                 # Discard if no space
+                 gs.discarded_plantations.append(tile_to_take)
         gs = self.game_state
         current_p = gs.players[gs.current_player_idx]
         
@@ -747,6 +761,7 @@ class PuertoRicoEnv2P(gym.Env):
             # Next player in queue
             gs.current_player_idx = gs.action_queue[0]
             gs.current_role_privilege = False # Privilege only for first actor
+            gs.hacienda_used = False # Reset Hacienda flag
         else:
             # End of Role Phase
             self._end_role_phase()
@@ -940,14 +955,20 @@ class PuertoRicoEnv2P(gym.Env):
                 
                 # University Ability: Get 1 colonist
                 if target_slot_idx != -1:
-                     has_university = False
-                     for slot in current_p.city:
-                         if slot['building'] == c.BUILDING_UNIVERSITY and slot['workers'] > 0:
-                             has_university = True
-                             break
-                     if has_university and gs.supply_colonists > 0:
-                         current_p.city[target_slot_idx]['workers'] = 1
-                         gs.supply_colonists -= 1
+                    has_university = False
+                    for slot in current_p.city:
+                        if slot['building'] == c.BUILDING_UNIVERSITY and slot['workers'] > 0:
+                            has_university = True
+                            break
+                         
+                    if has_university:
+                        if gs.supply_colonists > 0:
+                            current_p.city[target_slot_idx]['workers'] += 1
+                            gs.supply_colonists -= 1
+                        elif gs.colonist_ship > 0:# 공급처가 비었을 때 인력 시장에서 가져오는 로직 추가
+                            current_p.city[target_slot_idx]['workers'] += 1
+                            gs.colonist_ship -= 1
+                        
                 
                 # Check for Game End (12 buildings)
                 # Count filled slots
@@ -1040,11 +1061,13 @@ class PuertoRicoEnv2P(gym.Env):
         current_p = gs.players[gs.current_player_idx]
         
         did_ship = False
+        ship_amount = 0
         
         if action == c.ACTION_PASS:
             gs.captain_consecutive_passes += 1
+            
         elif c.ACTION_SHIP_CORN <= action <= c.ACTION_SHIP_COFFEE:
-             # Ship Logic
+             # Normal Shipping
              good_map = {
                 c.ACTION_SHIP_CORN: c.CORN,
                 c.ACTION_SHIP_FRUIT: c.FRUIT,
@@ -1054,17 +1077,16 @@ class PuertoRicoEnv2P(gym.Env):
              }
              good_id = good_map[action]
              
-             # Calculate Normal Shipping Option
+             # Find best ship (or first valid)
              best_ship_idx = -1
-             normal_ship_amount = 0
              
              for s_idx, ship in enumerate(gs.ships):
                  if ship['good'] == good_id and ship['count'] < ship['capacity']:
                      amount = min(current_p.goods[good_id], ship['capacity'] - ship['count'])
                      if amount > 0:
                          best_ship_idx = s_idx
-                         normal_ship_amount = amount
-                         break # Take first valid
+                         ship_amount = amount
+                         break 
                  elif ship['good'] == -1:
                      # Check others
                      other_has = False
@@ -1076,82 +1098,62 @@ class PuertoRicoEnv2P(gym.Env):
                          amount = min(current_p.goods[good_id], ship['capacity'])
                          if amount > 0:
                              best_ship_idx = s_idx
-                             normal_ship_amount = amount
-                             break # Take first valid
+                             ship_amount = amount
+                             break
              
-             # Calculate Wharf Shipping Option
-             wharf_amount = 0
-             has_wharf = False
-             if not current_p.wharf_used:
-                  for slot in current_p.city:
-                      if slot['building'] == c.BUILDING_WHARF and slot['workers'] > 0:
-                          has_wharf = True
-                          break
-             
-             if has_wharf:
-                 wharf_amount = current_p.goods[good_id]
-            
-             # Decision: Use Wharf if Better than Normal
-             use_wharf = False
-             if has_wharf and wharf_amount > normal_ship_amount:
-                 use_wharf = True
-             elif best_ship_idx == -1 and has_wharf and wharf_amount > 0:
-                 use_wharf = True
-             elif best_ship_idx != -1:
-                 # Default to Normal
-                 use_wharf = False
-                 
-             # Execute
-             if use_wharf:
-                 ship_amount = wharf_amount
-                 current_p.goods[good_id] -= ship_amount
-                 gs.supply_goods[good_id] += ship_amount
-                 current_p.wharf_used = True
-                 # Wharf allows shipping ALL. No ship capacity limit.
-                 # No ship modified.
-             elif best_ship_idx != -1:
+             if best_ship_idx != -1 and ship_amount > 0:
                  ship = gs.ships[best_ship_idx]
-                 ship_amount = normal_ship_amount
                  current_p.goods[good_id] -= ship_amount
                  gs.supply_goods[good_id] += ship_amount
                  if ship['good'] == -1:
                      ship['good'] = good_id
                  ship['count'] += ship_amount
-             else:
-                 # Should not happen if Mask is correct
-                 ship_amount = 0
+                 did_ship = True
+                 
+        elif c.ACTION_SHIP_TO_WHARF_CORN <= action <= c.ACTION_SHIP_TO_WHARF_COFFEE:
+             # Wharf Shipping
+             good_map = {
+                c.ACTION_SHIP_TO_WHARF_CORN: c.CORN,
+                c.ACTION_SHIP_TO_WHARF_FRUIT: c.FRUIT,
+                c.ACTION_SHIP_TO_WHARF_SUGAR: c.SUGAR,
+                c.ACTION_SHIP_TO_WHARF_TOBACCO: c.TOBACCO,
+                c.ACTION_SHIP_TO_WHARF_COFFEE: c.COFFEE
+             }
+             good_id = good_map[action]
              
+             ship_amount = current_p.goods[good_id]
              if ship_amount > 0:
-                 # VP
-                 points = ship_amount
-                 
-                 # Harbor Bonus (+1 VP extra per shipment)
-                 has_harbor = False
-                 for slot in current_p.city:
-                     if slot['building'] == c.BUILDING_HARBOR and slot['workers'] > 0:
-                         has_harbor = True
-                         break
-                 if has_harbor:
-                     points += 1
-                 
-                 current_p.vp_chips += points
-                 gs.supply_vp -= points
+                 current_p.goods[good_id] -= ship_amount
+                 gs.supply_goods[good_id] += ship_amount
+                 current_p.wharf_used = True
+                 did_ship = True
+        
+        if did_ship:
+             gs.captain_consecutive_passes = 0
+             
+             # VP Calculation
+             points = ship_amount
+             
+             # Harbor Bonus
+             has_harbor = False
+             for slot in current_p.city:
+                 if slot['building'] == c.BUILDING_HARBOR and slot['workers'] > 0:
+                     has_harbor = True
+                     break
+             if has_harbor:
+                 points += 1
+             
+             current_p.vp_chips += points
+             gs.supply_vp -= points
+             if gs.supply_vp <= 0:
+                 gs.game_end_triggered = True
+             
+             # Captain Privilege
+             if gs.current_role_privilege:
+                 current_p.vp_chips += 1
+                 gs.supply_vp -= 1
                  if gs.supply_vp <= 0:
                      gs.game_end_triggered = True
-                 
-                 # Captain Privilege
-                 if gs.current_role_privilege:
-                     current_p.vp_chips += 1
-                     gs.supply_vp -= 1
-                     if gs.supply_vp <= 0:
-                         gs.game_end_triggered = True
-                     # Privilege used? Logic handles `gs.current_role_privilege` via `_advance_queue`.
-                     # But in Captain, queue is cyclic.
-                     # We must ensure Privilege is only ONCE.
-                     # `_advance_queue` sets `current_role_privilege` to False. 
-                     # Wait, `_advance_queue` implementation: 
-                     # "gs.current_role_privilege = False" (Line 285 in previous view).
-                     # So subsequent actions in cyclic queue will NOT have privilege. Correct.
                  
                  did_ship = True
                  gs.captain_consecutive_passes = 0
@@ -1175,57 +1177,125 @@ class PuertoRicoEnv2P(gym.Env):
             if ship['count'] == ship['capacity']:
                 ship['good'] = -1
                 ship['count'] = 0
-                
-        # 2. Rotting (Keep 1 + Warehouse Protection)
+        
+        # Reset Wharf usage for all players
         for p in gs.players:
-            # Check Warehouses
-            protect_kinds = 0
-            for slot in p.city:
-                if slot['workers'] > 0:
-                    if slot['building'] == c.BUILDING_SMALL_WAREHOUSE:
-                        protect_kinds += 1
-                    elif slot['building'] == c.BUILDING_LARGE_WAREHOUSE:
-                        protect_kinds += 2
-                        
-            # Strategy: Keep types with most quantity fully (up to protect_kinds).
-            # Then keep 1 of another type.
-            # Discard rest.
+            p.wharf_used = False
+        
+        # 2. Setup Rotting Phase
+        gs.rotting_queue = []
+        for i in range(c.NUM_PLAYERS):
+            p = gs.players[i]
+            if sum(p.goods) > 0:
+                gs.rotting_queue.append(i)
+        
+        if gs.rotting_queue:
+            gs.phase = c.PHASE_ROTTING
+            gs.current_player_idx = gs.rotting_queue[0]
+            gs.rotting_protected_types = []
+            self._init_rotting_step(gs.players[gs.current_player_idx])
+        else:
+            self._end_role_phase()
+
+    def _step_rotting(self, action):
+        gs = self.game_state
+        p_idx = gs.current_player_idx
+        p = gs.players[p_idx]
+        
+        # Check active buildings
+        has_small_wh = False
+        has_large_wh = False
+        for slot in p.city:
+            if slot['workers'] > 0:
+                if slot['building'] == c.BUILDING_SMALL_WAREHOUSE:
+                    has_small_wh = True
+                elif slot['building'] == c.BUILDING_LARGE_WAREHOUSE:
+                    has_large_wh = True
+        
+        if c.ACTION_KEEP_CORN <= action <= c.ACTION_KEEP_COFFEE:
+            good_id = action - c.ACTION_KEEP_CORN
             
-            # Identify held goods
-            held_types = []
-            for g_id in range(c.NUM_GOODS):
-                if p.goods[g_id] > 0:
-                    held_types.append((g_id, p.goods[g_id]))
-            
-            # Sort by Quantity Descending (Keep most valuable volume)
-            held_types.sort(key=lambda x: x[1], reverse=True)
-            
-            kinds_to_keep_fully = protect_kinds
-            
-            processed_types = 0
-            has_kept_one_unit = False
-            
-            for g_id, qty in held_types:
-                if processed_types < kinds_to_keep_fully:
-                    # Keep all
-                    processed_types += 1
-                else:
-                    # Keep 1 if haven't yet
-                    if not has_kept_one_unit:
-                        if qty > 1:
-                            # Discard qty-1
-                            p.goods[g_id] = 1
-                            gs.supply_goods[g_id] += (qty - 1)
-                        has_kept_one_unit = True
+            if gs.rotting_step == 0: # Small WH
+                if good_id not in gs.rotting_protected_types:
+                    gs.rotting_protected_types.append(good_id)
+                self._advance_rotting_logic(p, has_small_wh, has_large_wh)
+                
+            elif gs.rotting_step == 1: # Large WH Slot 1
+                if good_id not in gs.rotting_protected_types:
+                    gs.rotting_protected_types.append(good_id)
+                self._advance_rotting_logic(p, has_small_wh, has_large_wh)
+                
+            elif gs.rotting_step == 2: # Large WH Slot 2
+                if good_id not in gs.rotting_protected_types:
+                    gs.rotting_protected_types.append(good_id)
+                self._advance_rotting_logic(p, has_small_wh, has_large_wh)
+                
+            elif gs.rotting_step == 3: # Windrose
+                # Keep 1 unit of good_id.
+                # Execute Discard
+                for g in range(c.NUM_GOODS):
+                    if g in gs.rotting_protected_types:
+                        continue # Keep all
+                    
+                    if g == good_id:
+                        # Keep 1, discard rest
+                        if p.goods[g] > 1:
+                            gs.supply_goods[g] += (p.goods[g] - 1)
+                            p.goods[g] = 1
                     else:
                         # Discard all
-                        p.goods[g_id] = 0
-                        gs.supply_goods[g_id] += qty
-            
-            # Reset Wharf usage
-            p.wharf_used = False
-            
-        self._end_role_phase()
+                        gs.supply_goods[g] += p.goods[g]
+                        p.goods[g] = 0
+                
+                # Finish player
+                gs.rotting_queue.pop(0)
+                if gs.rotting_queue:
+                    gs.current_player_idx = gs.rotting_queue[0]
+                    gs.rotting_protected_types = []
+                    self._init_rotting_step(gs.players[gs.current_player_idx])
+                else:
+                    self._end_role_phase()
+
+    def _init_rotting_step(self, p):
+        # Check WHs
+        has_small_wh = False
+        has_large_wh = False
+        for slot in p.city:
+            if slot['workers'] > 0:
+                if slot['building'] == c.BUILDING_SMALL_WAREHOUSE:
+                    has_small_wh = True
+                elif slot['building'] == c.BUILDING_LARGE_WAREHOUSE:
+                    has_large_wh = True
+        
+        gs = self.game_state
+        gs.rotting_step = 0
+        
+        # Skip invalid steps
+        if not has_small_wh:
+            gs.rotting_step = 1
+            if not has_large_wh:
+                gs.rotting_step = 3 # Skip Large 1 & 2
+    
+    def _advance_rotting_logic(self, p, has_small, has_large):
+        gs = self.game_state
+        gs.rotting_step += 1
+        
+        while True:
+            if gs.rotting_step == 0:
+                if has_small: break
+                else: gs.rotting_step += 1
+            elif gs.rotting_step == 1:
+                if has_large: break
+                else: 
+                    if not has_large: gs.rotting_step = 3
+                    else: gs.rotting_step += 1
+            elif gs.rotting_step == 2:
+                if has_large: break
+                else: gs.rotting_step += 1
+            elif gs.rotting_step == 3:
+                break # Always do Windrose
+            else:
+                break
 
     def _calculate_score(self):
         gs = self.game_state
